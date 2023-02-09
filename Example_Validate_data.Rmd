@@ -1,0 +1,170 @@
+```{r library, include=FALSE}
+my_packages <- c("data.table", "tidyverse", 
+                 "GEOquery", # download GEO data
+                 "readxl"
+                 )
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# select pathways
+
+```{r}
+index1 <- which(grepl("GOBP_GLOMERULAR_BASEMENT_MEMBRANE_DEVELOPMENT", names(pathway_list)))
+
+pathway <- pathway_list[[index1]]
+genes <- pathway@geneIds
+```
+
+
+# Build model with tuned parameters
+```{r}
+tumor <- "MESO"
+tumor_file <- paste0(tumor, ".Rds")
+my_path <- "Output/Steps/R01/pan_RNA_exp/"
+test_exp <- readRDS(paste0(my_path, tumor_file))
+test_survival <- pan_anno_df[pan_anno_df$Project %in% tumor,]
+```
+
+```{r}
+seed = 60; cv = 6; alpha = 0.2
+
+clinical1 <- data.frame(
+  patient = colnames(test_exp),
+  group = ifelse(as.numeric(substr(colnames(test_exp), nchar(colnames(test_exp))-2, nchar(colnames(test_exp))-1)) < 10, "Tumor", "Normal")
+)
+clinical1$group <- factor(clinical1$group, levels = c("Normal", "Tumor"))
+# Filter
+## DEGs
+test_exp2 <- test_exp[rownames(test_exp) %in% genes,]
+if (as.numeric(table(clinical1$group)[1]) > 4){
+  DEGs <- wilcoxDEGs(test_exp2, clinical1)
+  DEGs2 <- DEGs[abs(DEGs$LogFC) > 1 & DEGs$FDR < .2,]
+  test_exp3 <- test_exp2[rownames(test_exp2) %in% rownames(DEGs2),]
+  test_exp4 <- tumorFilter(test_exp3, test_survival)[[1]]
+  test_survival4 <- tumorFilter(test_exp3, test_survival)[[2]]
+} else{
+  test_exp4 <- test_exp2
+  test_survival4 <- test_survival
+}
+## Cox
+cox_re <- coxFilter(test_exp4, test_survival4)
+cox_re2 <- cox_re[cox_re < .1]
+p_val <- .01
+while(length(cox_re2) > 50) {
+  cox_re2 <- cox_re2[cox_re2 < p_val]
+  p_val = p_val - 0.005
+}
+test_exp5 <- test_exp4[rownames(test_exp4) %in% names(cox_re2),]
+## Filtered with OS data
+test_survival5 <- na.omit(test_survival4)
+test_exp5 <- test_exp5[,match(test_survival5$sample, colnames(test_exp5))]
+# Change gene names
+rownames(test_exp5) <- gsub("-", "_", rownames(test_exp5), fixed = T)
+# Model input
+test_survival4 <- test_survival5
+with_seed(seed = seed, svfold_cv <- vfold_cv(test_survival4, v = 3, repeats = 5,                                               strata = OS))
+svfold_cv <- svfold_cv[[1]]
+cv <- svfold_cv[[cv]]
+train_survival <- training(cv)
+val_survival <- testing(cv)
+train_exp <- test_exp5[,match(train_survival$sample, colnames(test_exp5))]
+val_exp <- test_exp5[,match(val_survival$sample, colnames(test_exp5))]
+# Build model
+with_seed(seed = 66, lasso_CV <- cv.glmnet(x=t(train_exp), y=train_survival$OS, nlambda = 1000,alpha = alpha))
+```
+
+```{r}
+best_model <- glmnet(x=t(train_exp), y=train_survival$OS, alpha = alpha, lambda = lasso_CV$lambda.min)
+best_model_re <- as.matrix(coef(best_model))
+best_model_re <- best_model_re[,1]
+best_model_re <- best_model_re[-1]
+selected_lasso_genes <- names(best_model_re[best_model_re!=0])
+```
+
+validate:
+```{r}
+lasso.pre.train <- as.data.frame(predict(lasso_CV, newx=t(train_exp), s=lasso_CV$lambda.min))
+lasso.pre.train$True <- train_survival$OS
+train.auc <- tryCatch(calAUC(lasso.pre.train),
+                      error = function(x){0})
+train.auc
+```
+
+# Example download
+MESO, GSE2549
+
+GSE2549 
+```{r}
+gset <- getGEO("GSE2549", destdir = "Input/Validation/")
+
+exprSet1 <- exprs(gset[[1]])
+exprSet1 <- as.data.frame(exprSet1)
+pdata1 <- read_xls(path = "Input/Validation/amjpathol_166_6_1827__GordonSupplementalTable1.xls", sheet = 3)
+table(pdata1$censor)
+pdata1$OS <- ifelse(pdata1$censor %in% "censored", 0, 1)
+pdata1$Sample <- tolower(pdata1$Sample)
+pdata1 <- edit(pdata1)
+
+
+GSE2549_clinical <- pData(gset[[1]])
+GSE2549_clinical$title <- gsub("MPM ", "", GSE2549_clinical$title)
+GSE2549_clinical <- merge(GSE2549_clinical[,c(1,2)],
+                          pdata1, by.x = "title", by.y = "Sample")
+save(GSE2549_clinical, file = "Input/Validation/GSE2549_clinical.Rda")
+
+probe <- gset[[1]]@featureData@data
+# probe <- probe[-1,]
+probe <- probe[match(rownames(exprSet1), probe$ID),]
+
+identical(probe$ID, rownames(exprSet1))
+```
+
+```{r}
+exprSet1$gene_symbol <- probe$`Gene Symbol`
+```
+
+
+```{r}
+GSE2549_exp <- aggregate(.~gene_symbol,max,data=exprSet1)
+```
+
+```{r}
+rownames(GSE2549_exp) <- GSE2549_exp$gene_symbol
+```
+
+```{r}
+table(selected_lasso_genes %in% GSE21882_exp$gene_symbol)
+
+selected_lasso_genes[!selected_lasso_genes %in% GSE2549_exp$gene_symbol]
+```
+
+```{r}
+GSE2549_exp$gene_symbol <- NULL
+```
+
+
+```{r}
+GSE2549_exp_model <- GSE2549_exp[rownames(GSE2549_exp) %in% selected_lasso_genes,]
+```
+
+```{r}
+table(colnames(GSE2549_exp_model) %in% GSE2549_clinical$geo_accession)
+
+GSE2549_exp_model <- GSE2549_exp_model[,match(GSE2549_clinical$geo_accession, colnames(GSE2549_exp_model))]
+```
+
+
+
+# Outside validate datasets
+```{r}
+GSE2549_exp_model2 <- log2(GSE2549_exp_model + 1)
+
+outside_lasso <- as.data.frame(predict(lasso_CV, newx=t(GSE2549_exp_model2), s=lasso_CV$lambda.min))
+outside_lasso$True <- GSE2549_clinical$OS
+outside.auc <- tryCatch(calAUC(outside_lasso),
+                      error = function(x){0})
+outside.auc
+```
+

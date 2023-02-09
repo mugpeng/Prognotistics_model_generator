@@ -1,0 +1,99 @@
+```{r library, include=FALSE}
+my_packages <- c("tidyverse", "data.table",
+                 "withr",
+                 "ggpubr", "patchwork")
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# load data
+## model results
+```{r}
+tmp$res_list <- paste0("Output/output_v1/", list.files("Output/output_v1/"))
+with_seed(seed = 66, tmp$res_list2 <- sample(tmp$res_list, 50))
+
+res_list <- lapply(1:length(tmp$res_list2), function(x){
+  res_df <- fread(tmp$res_list2[x])
+  res_df$Pathway <- gsub("Output/output_v1/", "", tmp$res_list2[x])
+  return(res_df)
+})
+res_df <- do.call(rbind, res_list)
+```
+
+```{r}
+source("Function.R")
+```
+
+## Data
+```{r}
+pan_survival <- readRDS("Output/Steps/R01/pan_survival.Rds")
+
+pan_anno_df <- readRDS(file = "Output/Steps/R01/pan_anno.Rds")
+
+pathway_list <- readRDS("Output/Steps/R01/msigdb_selected_pathways.Rds")
+
+# with_seed(seed = 66, 
+#           pathway_list_sel <- sample(pathway_list, 60))
+```
+
+
+# AUC density
+```{r}
+p1 <- ggdensity(res_df, 
+          x = "AUC",
+          fill = "lightgray",
+          add = "median",
+          rug = T) + theme_bw()
+p1
+```
+
+three algorithm:
+```{r}
+res_df2 <- head(res_df, 100000)
+
+p2 <- ggdensity(res_df, 
+          x = "AUC",
+          fill = "method",
+          add = "median",
+          color = "method",
+   palette = paletteer::paletteer_d("ggsci::default_igv"),
+          rug = F) + theme_bw()
+p2
+```
+
+split each tumors:
+```{r}
+p3 <- ggdensity(res_df, 
+          x = "AUC",
+          fill = "method",
+          add = "median",
+          color = "method",
+   palette = paletteer::paletteer_d("ggsci::default_igv"),
+          rug = F) + theme_bw() + 
+  facet_wrap(~Type, nrow = 4)
+p3
+```
+
+# AUC compare
+```{r}
+p4 <- ggboxplot(data = res_df,
+                x = "method", y = "AUC",
+                fill = "method",
+                palette = paletteer::paletteer_d("ggsci::default_igv")) + theme_bw() +
+  stat_compare_means()
+p4
+```
+
+```{r}
+p5 <- ggboxplot(data = res_df,
+                x = "method", y = "AUC",
+                fill = "method",
+                palette = paletteer::paletteer_d("ggsci::default_igv")) + theme_bw() +
+  stat_compare_means(aes(group = method,label = ..p.signif..)) + facet_wrap(~Type, nrow = 4)
+p5
+```
+
+It seems like the pathway based basic ML model construction is tumor preference.
+
+And lasso model is the most robust method.
