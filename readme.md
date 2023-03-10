@@ -1,3 +1,13 @@
+# Some mumbles
+
+It's just a simple attempt that three very simple ML methods with different parameters, input selection(tumor types, feature selection) can generate 118,956,840 models. And there are numerous prognostics models created for publishing without any validations or clinical applications.
+
+[There is no such thing as a validated prediction model | BMC Medicine | Full Text](https://bmcmedicine.biomedcentral.com/articles/10.1186/s12916-023-02779-w#Sec2)
+
+What if I generate many many many models? 
+
+
+
 # Design
 
 Here, I create TPMG(tumor prognostics model generator).
@@ -9,6 +19,41 @@ Survival data corresponding with the RNA-seq data was obtained from xena (https:
 Gene pathways were downloaded from  The Molecular Signatures Database (MSigDB) of Human Collections (https://www.gsea-msigdb.org/gsea/msigdb). For selecting meaningful pathways, we retained pathways from HALLMARK(50), KEGG(186), GO_BP(7763) and GO_CC(1035), GO_MF(1763), which including 10,797 pathways.
 
 For developing a satisfied prognostic model, I performed a 3-fold CV with 30 repeats of three machine learning methods including, lasso regression model(R package "glmnet"), cox regression(R package "survival") and random forest(R package "randomForest"). I also applied these models with different parameters. Specifically, in lasso regression model, the parameter is alpha = 0,0.1,0.2,...,0.8,0.9,1; in random forest. the parameter is mtry = 10, 15, 20, 30, ntree = 20, 50, 100, 200; in cox regression model, the parameter is step wise step = "yes" or "no". So theoretically, It can produce 870(30 × 11 + 30 × 4 × 4 + 30 × 2) models for each pathway, 9,393,390(870 × 10,797) models for each tumor, 356,948,820(9,393,390 × 38) models altogether.
+
+
+
+# Some descriptions
+
+- Theoretically, the TPMG can produce 347,555,430 models for each tumor-pathway pairs. But some pathways might not have sufficient genes to generate models or less sufficient thus been discarded.
+- TGCT tumor is missing because too less survival records to generate models.
+- You can change the scripts for your tumor data or interested pathways(gene list).
+- The input and temporary files, model generator results(parameter) are uploaded on figshare.
+
+
+
+# Code orders
+
+- Preparation files:
+  - Function.R
+  - bash_script, for create files for multi-threads
+
+
+
+- Data preprocess
+  - R01
+- Model generators 
+  - Main.R, iterate all pathways in different tumors；
+  - bash_script/make_parallel_script.sh，；
+  - bash_script/split_all_script.sh，
+    - -l for assigning how many pathways to run in a script，(total pathway counts/i) is the parallel number；
+  - script_run.sh，run these script when everything is ready；
+- Validate model from outside
+  - only for lasso validation right now，R02
+- Subsequent analysis including survival, immune infiltration analysis.
+  - R03、R04
+- Statics analysis 
+  - R05、R06、R07
+  - Are there any possibilities that the best performance pathways or the intersected genes in these pathways can reveal some new findings like cancerous genes?
 
 
 
@@ -195,48 +240,3 @@ ACC,"ABCC5, AHR, AOX1, CES2, CRYZ, CYP1A2, CYP26B1, CYP2C18, CYP2D7, CYP2U1, CYP
 
 
 
-# Code orders
-
-- Preparation files:
-  - Function.R
-  - bash_script, for create files for multi-threads
-
-
-
-- Data preprocess
-  - R01
-- Model generators 
-  - Main.R, iterate all pathways in different tumors；
-  - bash_script/make_parallel_script.sh，；
-  - bash_script/split_all_script.sh，
-    - -l for assigning how many pathways to run in a script，(total pathway counts/i) is the parallel number；
-  - script_run.sh，run these script when everything is ready；
-- Validate model from outside
-  - only for lasso validation right now，R02
-- Subsequent analysis including survival, immune infiltration analysis.
-  - R03、R04
-- Statics analysis 
-  - R05、R06、R07
-  - Are there any possibilities that the best performance pathways or the intersected genes in these pathways can reveal some new findings like cancerous genes?
-
-
-
-# Model statistics
-
-## AUC results
-
-Theoretically, the TPMG can produce 347,555,430 models for each tumor-pathway pairs. But some pathways might not have sufficient genes to generate models or less sufficient thus been discarded
-
-
-
-# Some descriptions
-
-- TGCT tumor is missing because too less survival records to generate models.
-- You can change the scripts for your tumor data or interested pathways(gene list).
-- The input and temporary files, model generator results(parameter) are uploaded on figshare.
-
-
-
-# Some mumbles
-
-It's just a simple attempt that three very simple ML methods with different parameters, input selection(tumor types, feature selection) can generate 118,956,840 models.
