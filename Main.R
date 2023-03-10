@@ -11,12 +11,14 @@ with_seed(seed = 66,
 tumor_project <- unique(pan_anno_df$Project)
 tumor_project_file <- paste0(tumor_project, ".Rds")
 
-pathway <- pathway_list[[5534]]
+args <- commandArgs(T)
+index1 <- as.numeric(args[1])
+pathway <- pathway_list[[index1]]
 genes <- pathway@geneIds
 
 # Run----
 all_cost_time <- system.time(
-  tumor_list <- lapply(tumor_project[6:16], function(tumor){
+  tumor_list <- lapply(tumor_project, function(tumor){
   # tumor = tumor_project[3]
   tumor_file <- paste0(tumor, ".Rds")
   my_path <- "Output/Steps/R01/pan_RNA_exp/"
@@ -33,4 +35,11 @@ tumor_df <- do.call(rbind, tumor_list2)
 tumor_df$Training <- as.numeric(tumor_df$Training)
 tumor_df$Testing <- as.numeric(tumor_df$Testing)
 tumor_df$AUC <- rowMeans(tumor_df[,1:2])
+pathway_names <- pathway@setName
 print("Finish Pathway!")
+
+# Save
+fwrite(tumor_df, file = paste0("Output/output_v1/", pathway_names, ".csv"))
+
+time1 <- as.numeric(all_cost_time[3])
+print(paste0("Time Consuming: ", time1))

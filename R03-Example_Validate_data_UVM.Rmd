@@ -1,0 +1,336 @@
+```{r library, include=FALSE}
+my_packages <- c("data.table", "tidyverse", "withr", # data wrangle
+                 "ggplot2", "ggpubr", "patchwork", # data visualization
+                 "glmnet",
+                 "ROCR","timeROC", "survival", "survminer" # Model assessment
+                 )
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# load data
+```{r}
+source("Function.R")
+```
+
+```{r}
+pan_survival <- readRDS("Output/Steps/R01/pan_survival.Rds")
+pan_anno_df <- readRDS(file = "Output/Steps/R01/pan_anno.Rds")
+pathway_list <- readRDS("Output/Steps/R01/msigdb_selected_pathways2_company2.Rds")
+```
+
+```{r}
+load("Output/Steps/R02/externals.Rda")
+
+tune_re <- readRDS(file = "Output/Steps/R02/validate_re.Rds")
+```
+
+```{r}
+res_df <- readRDS("Output/Steps/R01/res_df_0.9.Rds")
+res_df_sel <- res_df[res_df$Type %in% "UVM",]
+```
+
+# select pathways
+```{r}
+index1 <- which(grepl("GOBP_ANTERIOR_POSTERIOR_PATTERN_SPECIFICATION", names(pathway_list)))
+
+pathway <- pathway_list[[index1]]
+genes <- pathway@geneIds
+```
+
+
+# Build model with tuned parameters
+```{r}
+tumor <- "UVM"
+tumor_file <- paste0(tumor, ".Rds")
+my_path <- "Output/Steps/R01/pan_RNA_exp/"
+test_exp <- readRDS(paste0(my_path, tumor_file))
+test_survival <- pan_anno_df[pan_anno_df$Project %in% tumor,]
+```
+
+```{r}
+test_survival4 <- valProcess(test_exp, test_survival, genes)[[1]]
+test_exp5 <- valProcess(test_exp, test_survival, genes)[[2]]
+```
+
+## lasso
+```{r}
+seed = 60; cv = 8; alpha = 0.3
+
+# Model input
+with_seed(seed = seed, svfold_cv <- vfold_cv(test_survival4, v = 3, repeats = 5,                                               strata = OS))
+svfold_cv <- svfold_cv[[1]]
+cv <- svfold_cv[[cv]]
+train_survival <- training(cv)
+val_survival <- testing(cv)
+train_exp <- test_exp5[,match(train_survival$sample, colnames(test_exp5))]
+val_exp <- test_exp5[,match(val_survival$sample, colnames(test_exp5))]
+# Build model
+with_seed(seed = 66, lasso_CV <- cv.glmnet(x=t(train_exp), y=train_survival$OS, nlambda = 1000,alpha = alpha))
+```
+
+```{r}
+# best_model <- glmnet(x=t(train_exp), y=train_survival$OS, alpha = alpha, lambda = lasso_CV$lambda.min)
+# best_model_re <- as.matrix(coef(best_model))
+# best_model_re <- best_model_re[,1]
+# best_model_re <- best_model_re[-1]
+# selected_lasso_genes <- names(best_model_re[best_model_re!=0])
+```
+
+validate:
+```{r}
+lasso.pre.train <- as.data.frame(
+  predict(lasso_CV, newx=t(train_exp), s=lasso_CV$lambda.min)
+)
+lasso.pre.train$True <- train_survival$OS
+train.auc <- tryCatch(calAUC(lasso.pre.train),
+                      error = function(x){0})
+train.auc
+```
+## final models
+```{r}
+best_model <- glmnet(x=t(train_exp), y=train_survival$OS, alpha = alpha, lambda = lasso_CV$lambda.min)
+best_model_re <- as.matrix(coef(best_model))
+best_model_re <- best_model_re[,1]
+best_model_re <- best_model_re[-1]
+selected_lasso_genes <- names(best_model_re[best_model_re!=0])
+```
+
+```{r}
+f1 <- lasso_CV$glmnet.fit
+plot(f1, xvar="lambda", label=F)
+```
+
+```{r}
+plot(lasso_CV)
+```
+
+```{r}
+best_model_re[names(best_model_re) %in% selected_lasso_genes]
+```
+
+# Calculate risk scores
+```{r}
+eg2alias <- readRDS("Input/eg2alias_anndb.Rds")
+```
+
+```{r}
+symbol2Alias <- function(symbols, exp){
+  # symbol = missed_genes
+  re <- lapply(symbols, function(symbol){
+    index1 <- eg2alias[eg2alias$alias_symbol %in% symbol,]$gene_id
+    alias_df <- eg2alias[eg2alias$gene_id %in% index1,]
+    alias <- alias_df$alias_symbol[alias_df$alias_symbol %in% rownames(exp)]
+    alias <- alias[1]
+    c(symbol, alias)
+  })
+  re <- do.call(rbind, re)
+  colnames(re) <- c("symbol", "alias")
+  return(as.data.frame(re))
+}
+```
+
+```{r}
+findMissGenes <- function(exp, train_exp){
+  exp_model <- exp[rownames(exp) %in% rownames(train_exp),]
+  missed_genes <- rownames(train_exp)[!rownames(train_exp) %in% rownames(exp_model)]
+  alias_df <- symbol2Alias(missed_genes, exp)
+  alias_df2 <- rbind(alias_df,
+                     data.frame(
+                       symbol = rownames(exp_model),
+                       alias = rownames(exp_model)
+                     ))
+  exp_model <- exp[rownames(exp) %in% c(rownames(train_exp), 
+                                        alias_df$alias),]
+  alias_df2 <- alias_df2[match(rownames(exp_model), alias_df2$alias),]
+  rownames(exp_model) <- alias_df2$symbol
+  return(exp_model)
+}
+```
+
+
+```{r}
+train_survival$risk_scores <- as.numeric(predict(lasso_CV, newx=t(train_exp), s=lasso_CV$lambda.min))
+val_survival$risk_scores <- as.numeric(predict(lasso_CV, newx=t(val_exp), s=lasso_CV$lambda.min))
+
+# GSE22138_exp2 <- findMissGenes(GSE22138_exp, train_exp)
+GSE22138_exp2 <- GSE22138_exp[rownames(GSE22138_exp) %in% rownames(train_exp),]
+GSE22138_clinical$risk_scores <- as.numeric( predict(lasso_CV, newx=t(GSE22138_exp2), s=lasso_CV$lambda.min))
+
+GSE84976_exp2 <- findMissGenes(GSE84976_exp, train_exp)
+# GSE84976_exp2 <- GSE84976_exp[rownames(GSE84976_exp) %in% rownames(train_exp),]
+GSE84976_clinical$risk_scores <- as.numeric(predict(lasso_CV, newx=t(GSE84976_exp2), s=lasso_CV$lambda.min))
+
+# meso_exp2 <- meso_exp[rownames(meso_exp) %in% rownames(train_exp),]
+# meso_clinical$risk_scores <- as.numeric( predict(lasso_CV, newx=t(meso_exp2), s=lasso_CV$lambda.min))
+```
+
+
+# Survival analysis
+```{r}
+res.cut <- surv_cutpoint(train_survival, time = "OS.time", event = "OS",
+                         variables = "risk_scores")
+plot(res.cut, "risk_scores")
+```
+
+```{r}
+train_survival$risk_group <- ifelse(train_survival$risk_scores > median(train_survival$risk_scores), 
+                                   "high", "low")
+
+val_survival$risk_group <- ifelse(val_survival$risk_scores > median(val_survival$risk_scores), 
+                                   "high", "low")
+# meso_clinical$risk_group <- ifelse(meso_clinical$risk_scores > median(meso_clinical$risk_scores), 
+#                                    "high", "low")
+GSE84976_clinical$risk_group <- ifelse(GSE84976_clinical$risk_scores > median(GSE84976_clinical$risk_scores), 
+                                   "high", "low")
+GSE22138_clinical$risk_group <- ifelse(GSE22138_clinical$risk_scores > median(GSE22138_clinical$risk_scores), 
+                                   "high", "low")
+```
+
+Suv:
+```{r}
+sur_data <- train_survival
+fit <- survfit(Surv(OS.time, OS)~risk_group, data = sur_data)
+ggsurvplot(fit, data = sur_data, risk.table = TRUE, conf.int = F, pval = T) + ggtitle("Training datasets")
+```
+
+```{r}
+sur_data <- val_survival
+fit <- survfit(Surv(OS.time, OS)~risk_group, data = sur_data)
+ggsurvplot(fit, data = sur_data, risk.table = TRUE, conf.int = F, pval = T) + ggtitle("Validation datasets")
+```
+
+```{r}
+# sur_data <- meso_clinical
+# fit <- survfit(Surv(OS.time, OS)~risk_group, data = sur_data)
+# ggsurvplot(fit, data = sur_data, risk.table = TRUE, conf.int = F, pval = T) + ggtitle("MESO datasets")
+```
+
+```{r}
+GSE84976_clinical$OS.time <- as.numeric(GSE84976_clinical$`follow-up (months):ch1`)*30
+```
+
+
+```{r}
+sur_data <- GSE84976_clinical
+fit <- survfit(Surv(OS.time, OS)~risk_group, data = sur_data)
+ggsurvplot(fit, data = sur_data, risk.table = TRUE, conf.int = F, pval = T) + ggtitle("GSE84976 datasets")
+```
+
+```{r}
+GSE22138_clinical$OS.time <- as.numeric(GSE22138_clinical$`months to endpoint:ch1`)*30
+GSE22138_clinical$OS <-ifelse(GSE22138_clinical$`metastasis:ch1` %in% "yes", 1, 0)
+```
+
+
+```{r}
+sur_data <- GSE22138_clinical
+fit <- survfit(Surv(OS.time, OS)~risk_group, data = sur_data)
+ggsurvplot(fit, data = sur_data, risk.table = TRUE, conf.int = F, pval = T) + ggtitle("GSE22138 datasets metastasis state")
+```
+
+# Model ROC
+```{r}
+plot_time_ROC <- function(clinical, title,
+                          times = c(1,3,5)){
+  ROC <- timeROC(T = clinical$OS.Year,
+                    delta = clinical$OS,
+                    marker = clinical$risk_scores,
+                    cause = 1,
+                    weighting = "marginal",
+                    times = times,
+                    ROC = T,
+                    iid = T)
+  ROC_df <- data.frame(tpr_1 = ROC$TP[,1],
+                   fpr_1 = ROC$FP[,1],
+                   tpr_3 = ROC$TP[,2],
+                   fpr_3 = ROC$FP[,2],
+                   tpr_5 = ROC$TP[,3],
+                   fpr_5 = ROC$FP[,3])
+  auc_1 <- ROC$AUC[[1]]
+  auc_3 <- ROC$AUC[[2]]
+  auc_5 <- ROC$AUC[[3]]
+  p <- ggplot() + 
+    geom_line(data = ROC_df, aes(x = fpr_1, y = tpr_1),color = "#BEBADAFF") + 
+    geom_line(data = ROC_df, aes(x = fpr_3, y = tpr_3),color = "#FB8072FF")+
+    geom_line(data = ROC_df, aes(x = fpr_5, y = tpr_5),color = "#80B1D3FF") +
+    geom_line(aes(x=c(0,1),y=c(0,1)),color = "grey")+
+    theme_bw()+
+    annotate("text",x = .75, y = .15,
+             label = paste(times[1], " years = ",round(auc_1,2)),color = "#BEBADAFF")+
+    annotate("text",x = .75, y = .25,label = paste(times[2], " years = ",round(auc_3,2)),color = "#FB8072FF")+
+    annotate("text",x = .75, y = .35,label = paste(times[3], " years = ",round(auc_5,2)),color = "#80B1D3FF")+
+    scale_x_continuous(name  = "fpr")+
+    scale_y_continuous(name = "tpr") + ggtitle(title)
+  return(p)
+}
+```
+
+```{r}
+train_survival$OS.Year <- train_survival$OS.time / 365
+val_survival$OS.Year <- val_survival$OS.time / 365
+# meso_clinical$OS.Year <- meso_clinical$OS.time / 365
+GSE84976_clinical$OS.Year <- GSE84976_clinical$OS.time / 365
+GSE22138_clinical$OS.Year <- GSE22138_clinical$OS.time / 365 
+```
+
+```{r}
+plot_time_ROC(train_survival, "TRAIN")
+plot_time_ROC(val_survival, "TEST", 
+              times = c(1,2,3))
+# plot_time_ROC(meso_clinical, "MESO")
+plot_time_ROC(GSE84976_clinical, "GSE84976",
+              c(2,5,7))
+plot_time_ROC(GSE22138_clinical, "GSE22138")
+
+```
+
+# Calculate risk scores in all TCGA-UVM samples
+```{r}
+tumor <- "UVM"
+tumor_file <- paste0(tumor, ".Rds")
+my_path <- "Output/Steps/R01/pan_RNA_exp/"
+test_exp <- readRDS(paste0(my_path, tumor_file))
+test_survival <- pan_anno_df[pan_anno_df$Project %in% tumor,]
+```
+
+```{r}
+UVM_exp <- valProcess(test_exp, test_survival, genes)[[2]]
+UVM_survival <- valProcess(test_exp, test_survival, genes)[[1]]
+```
+
+
+```{r}
+UVM_exp2 <- UVM_exp[rownames(UVM_exp) %in% rownames(train_exp),]
+```
+
+```{r}
+UVM_survival$risk_scores <- as.numeric(predict(lasso_CV, newx=t(UVM_exp2), s=lasso_CV$lambda.min))
+
+UVM_survival$risk_group <- ifelse(UVM_survival$risk_scores > median(UVM_survival$risk_scores), 
+                                   "high", "low")
+
+head(UVM_survival)
+```
+
+```{r}
+sur_data <- UVM_survival
+fit <- survfit(Surv(OS.time, OS)~risk_group, data = sur_data)
+ggsurvplot(fit, data = sur_data, risk.table = TRUE, conf.int = F, pval = T) + ggtitle("TCGA-UVM")
+```
+
+```{r}
+UVM_survival$OS.Year <- UVM_survival$OS.time / 365
+plot_time_ROC(UVM_survival, "UVM")
+```
+
+
+# Save
+```{r}
+save(UVM_exp, UVM_survival,
+     file = "Output/Steps/R03/UVM.Rda")
+```
+
+
+

@@ -1,0 +1,287 @@
+# load data
+```{r library, include=FALSE}
+my_packages <- c("data.table", "tidyverse",
+                 "ggplot2", "ggpubr", "patchwork",
+                 "IOBR",
+                 "clusterProfiler", "org.Hs.eg.db"
+                 )
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+```{r}
+load(file = "Output/Steps/R03/UVM.Rda")
+```
+
+# Function
+```{r}
+wilcoxDEGs <- function(exp_df, clinical1){
+  id1 <- clinical1[clinical1$group %in% levels(clinical1$group)[1],]$sample
+  id2 <- clinical1[clinical1$group %in% levels(clinical1$group)[2],]$sample
+  group1 <- exp_df[,colnames(exp_df) %in% id1]
+  group2 <- exp_df[,colnames(exp_df) %in% id2]
+  re <- lapply(1:nrow(exp_df), function(x){
+    p <- wilcox.test(as.numeric(group2[x,]), as.numeric(group1[x,]))$p.value
+    logFC <- mean(as.numeric(group2[x,])) - mean(as.numeric(group1[x,]))
+    c(p, logFC)
+  })
+  re <- as.data.frame(do.call(rbind, re))
+  rownames(re) <- rownames(exp_df)
+  colnames(re) <- c("P.value", "LogFC")
+  re$FDR <- p.adjust(re$P.value, method = "fdr") 
+  return(re)
+}
+
+# exp_df should in no-log format
+wilcoxDEGs2 <- function(exp_df, clinical1){
+  id1 <- clinical1[clinical1$group %in% levels(clinical1$group)[1],]$sample
+  id2 <- clinical1[clinical1$group %in% levels(clinical1$group)[2],]$sample
+  group1 <- exp_df[,colnames(exp_df) %in% id1]
+  group2 <- exp_df[,colnames(exp_df) %in% id2]
+  re <- lapply(1:nrow(exp_df), function(x){
+    p <- wilcox.test(as.numeric(group2[x,]), as.numeric(group1[x,]))$p.value
+    logFC <- log2(mean(as.numeric(group2[x,])) / mean(as.numeric(group1[x,])))
+    c(p, logFC)
+  })
+  re <- as.data.frame(do.call(rbind, re))
+  rownames(re) <- rownames(exp_df)
+  colnames(re) <- c("P.value", "LogFC")
+  re$FDR <- p.adjust(re$P.value, method = "fdr") 
+  return(re)
+}
+```
+
+# Enrichment analysis
+## DEGs
+```{r}
+UVM_survival$risk_group <- factor(UVM_survival$risk_group, 
+                                  levels = c("low", "high"))
+UVM_survival <- UVM_survival %>% 
+  mutate(risk_group2 = ntile(risk_scores, 10))
+UVM_survival <- UVM_survival[!UVM_survival$risk_group2 %in% c(5,6),]
+
+UVM_survival$group <- UVM_survival$risk_group
+```
+
+```{r}
+UVM_exp2 <- UVM_exp[,match(UVM_survival$sample, colnames(UVM_exp))] 
+```
+
+```{r}
+design <- model.matrix(~0 + factor(UVM_survival$group, levels = c("high", "low")))
+```
+
+```{r}
+library(Linnorm)
+UVM_exp3 <- 2**(UVM_exp2) - 1
+DEGs_linno <- Linnorm.limma(datamatrix = UVM_exp3,
+              design = design)
+logFC_cutoff <- 2
+DEGs_linno$change <- ifelse((DEGs_linno$adj.P.Val < 0.05)&(DEGs_linno$logFC < -logFC_cutoff),"DOWN", ifelse((DEGs_linno$adj.P.Val < 0.05)&(DEGs_linno$logFC > logFC_cutoff),"UP","NOT"))
+table(DEGs_linno$change)
+```
+
+
+```{r, warning=F}
+DEGs <- wilcoxDEGs(UVM_exp2[,], UVM_survival)
+```
+
+```{r}
+logFC_cutoff <- 2
+DEGs$change <- ifelse((DEGs$FDR < 0.05)&(DEGs$LogFC < -logFC_cutoff),"DOWN", ifelse((DEGs$FDR < 0.05)&(DEGs$LogFC > logFC_cutoff),"UP","NOT"))
+table(DEGs$change)
+```
+
+```{r, warning = F}
+DEGs2 <- wilcoxDEGs2(UVM_exp3[,], UVM_survival)
+logFC_cutoff <- 2
+DEGs2$change <- ifelse((DEGs2$FDR < 0.05)&(DEGs2$LogFC < -logFC_cutoff),"DOWN", ifelse((DEGs2$FDR < 0.05)&(DEGs2$LogFC > logFC_cutoff),"UP","NOT"))
+table(DEGs2$change)
+```
+
+
+Compare:
+```{r}
+DEGs_linno$genes <- rownames(DEGs_linno)
+DEGs$genes <- rownames(DEGs)
+DEGs2$genes <- rownames(DEGs2)
+
+```
+
+```{r}
+length(intersect(DEGs_linno[DEGs_linno$change %in% "DOWN",]$genes, DEGs[DEGs$change %in% "DOWN",]$genes))
+
+length(intersect(DEGs_linno[DEGs_linno$change %in% "UP",]$genes, DEGs[DEGs$change %in% "UP",]$genes))
+```
+
+```{r}
+ggvenn::ggvenn(list(
+  linno = DEGs_linno[DEGs_linno$change %in% "UP",]$genes,
+  degs1 = DEGs[DEGs$change %in% "UP",]$genes,
+  degs2 = DEGs2[DEGs2$change %in% "UP",]$genes
+))
+```
+
+```{r}
+ggvenn::ggvenn(list(
+  linno = DEGs_linno[DEGs_linno$change %in% "DOWN",]$genes,
+  degs1 = DEGs[DEGs$change %in% "DOWN",]$genes,
+  degs2 = DEGs2[DEGs2$change %in% "DOWN",]$genes
+))
+```
+
+
+```{r}
+head(DEGs_linno[DEGs_linno$change %in% "DOWN",]$genes[!DEGs_linno[DEGs_linno$change %in% "DOWN",]$genes %in% intersect(DEGs_linno[DEGs_linno$change %in% "DOWN",]$genes, DEGs[DEGs$change %in% "DOWN",]$genes)])
+```
+
+## Test
+```{r}
+DEGs$change2 <- ifelse((DEGs$FDR < 0.05)&(DEGs$LogFC < -logFC_cutoff),"DOWN", ifelse((DEGs$FDR < 0.05)&(DEGs$LogFC > logFC_cutoff),"UP","NOT"))
+table(DEGs$change)
+```
+
+
+## Enrichment analysis
+```{r}
+DE_UP <- bitr(rownames(DEGs)[DEGs$change %in% "UP"], OrgDb = "org.Hs.eg.db", 
+                   fromType = "SYMBOL", toType = "ENTREZID")
+DE_DOWN <- bitr(rownames(DEGs)[DEGs$change %in% "DOWN"], OrgDb = "org.Hs.eg.db", 
+                   fromType = "SYMBOL", toType = "ENTREZID")
+```
+
+GO:
+```{r}
+DE_UP_GO <- enrichGO(gene = DE_UP$ENTREZID,
+                   OrgDb= org.Hs.eg.db,
+                   ont = "ALL",
+                   pAdjustMethod = "BH",
+                   minGSSize = 1,
+                   pvalueCutoff = 0.2,
+                   readable = TRUE)
+# DE_UP_GO_re <- DE_UP_GO@result
+
+DE_DOWN_GO <- enrichGO(gene = DE_DOWN$ENTREZID,
+                   OrgDb= org.Hs.eg.db,
+                   ont = "ALL",
+                   pAdjustMethod = "BH",
+                   minGSSize = 1,
+                   pvalueCutoff = 0.2,
+                   readable = TRUE)
+```
+
+KEGG:
+```{r}
+DE_UP_KK <- enrichKEGG(gene         =  DE_UP$ENTREZID,
+                      organism     = 'hsa',
+                      pvalueCutoff = 0.2,
+                      qvalueCutoff =0.2)
+
+DE_DOWN_KK <- enrichKEGG(gene         =  DE_DOWN$ENTREZID,
+                      organism     = 'hsa',
+                      pvalueCutoff = 1,
+                      qvalueCutoff =1)
+```
+
+```{r}
+wrap_plots(dotplot(DE_UP_KK, color = "pvalue") + ggtitle("UP"), dotplot(DE_DOWN_KK, color = "pvalue") + ggtitle("DOWN")) + plot_annotation(title = 'KEGG PATHWAY') & theme(plot.title = element_text(size = 20))
+```
+
+```{r}
+wrap_plots(dotplot(DE_UP_GO) + ggtitle("UP"), dotplot(DE_DOWN_GO) + ggtitle("DOWN")) + plot_annotation(title = 'GO PATHWAY') & theme(plot.title = element_text(size = 20))
+```
+
+# Immune infiltration
+cibersort:
+```{r}
+UVM_exp2 <- 2**(UVM_exp) - 1
+
+UVM_cibersort <- deconvo_tme(eset = UVM_exp2, method = "cibersort",arrays = FALSE, perm = 200)
+
+UVM_estimate <- deconvo_tme(eset = UVM_exp2, method = "estimate")
+```
+## Cibersort
+select Significant infiltrated Cell signatures 
+```{r}
+UVM_cibersort2 <- cbind(
+  as.data.frame(UVM_cibersort[,2:23]),
+  UVM_survival[,6:7]
+)
+```
+
+```{r}
+cibersort_re <- lapply(1:22, function(x){
+  # x = 2
+  p <- cor.test(UVM_cibersort2[,x], UVM_cibersort2$risk_scores)$p.value
+  R <- cor.test(UVM_cibersort2[,x], UVM_cibersort2$risk_scores)$estimate
+  data.frame(
+    p = p,
+    R = R
+  )
+})
+cibersort_re <- do.call(rbind, cibersort_re)
+rownames(cibersort_re) <- colnames(UVM_cibersort2)[1:22]
+```
+
+```{r}
+cibersort_re2 <- cibersort_re[cibersort_re$p < .05,]
+cibersort_re2$Cells <- gsub("_CIBERSORT", "",
+                            rownames(cibersort_re2))
+cibersort_re2$p <- -log10(cibersort_re2$p)
+ggdotchart(cibersort_re2, 
+           x = "Cells", y = "R", size = "p", color = "#fc4e07",
+           add = "segments", 
+           add.params = list(color = "lightgray", size = 2), 
+           rotate = TRUE) + theme_bw()
+```
+
+## Estimate
+```{r}
+UVM_estimate2 <- cbind(
+  as.data.frame(UVM_estimate),
+  UVM_survival[,c(6,7)]
+)
+```
+
+```{r}
+p1 <- ggboxplot(UVM_estimate2, x = "risk_group", y = "StromalScore_estimate",
+               color = "risk_group", palette = "jco",
+               add = "none") +
+  stat_compare_means(aes(group = risk_group,
+                         label = ..p.signif..),method = "wilcox.test") + theme_bw()  + theme(
+    axis.text.x = element_text(angle = 90)
+  )
+p2 <- ggboxplot(UVM_estimate2, x = "risk_group", y = "ImmuneScore_estimate",
+               color = "risk_group", palette = "jco",
+               add = "none") +
+  stat_compare_means(aes(group = risk_group,
+                         label = ..p.signif..),method = "wilcox.test") + theme_bw()  + theme(
+    axis.text.x = element_text(angle = 90)
+  )
+p3 <- ggboxplot(UVM_estimate2, x = "risk_group", y = "ESTIMATEScore_estimate",
+               color = "risk_group", palette = "jco",
+               add = "none") +
+  stat_compare_means(aes(group = risk_group,
+                         label = ..p.signif..),method = "wilcox.test") + theme_bw()  + theme(
+    axis.text.x = element_text(angle = 90)
+  )
+p4 <- ggboxplot(UVM_estimate2, x = "risk_group", y = "TumorPurity_estimate",
+               color = "risk_group", palette = "jco",
+               add = "none") +
+  stat_compare_means(aes(group = risk_group,
+                         label = ..p.signif..),method = "wilcox.test") + theme_bw()  + theme(
+    axis.text.x = element_text(angle = 90)
+  )
+wrap_plots(p1,p2,p3,p4, nrow = 1) + plot_layout(guides = 'collect')
+```
+
+# Save
+```{r}
+save(UVM_cibersort,
+     UVM_estimate,
+     file = "Output/Steps/R05/immune.Rda")
+```
+
+
+

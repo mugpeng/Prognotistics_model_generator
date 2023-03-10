@@ -1,0 +1,183 @@
+```{r library, include=FALSE}
+my_packages <- c("tidyverse", "data.table",
+                 "withr",
+                 "ggpubr", "patchwork")
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# load data
+## model results
+```{r}
+tmp$res_list <- paste0("Output/output_v1/", list.files("Output/output_v1/"))
+with_seed(seed = 66, tmp$res_list2 <- sample(tmp$res_list, 100))
+# tmp$res_list2 <- tmp$res_list
+
+res_list <- lapply(1:length(tmp$res_list2), function(x){
+  res_df <- fread(tmp$res_list2[x])
+  res_df$Pathway <- gsub("Output/output_v1/", "", tmp$res_list2[x])
+  res_df$Pathway <- gsub(".csv", "", res_df$Pathway)
+  return(res_df)
+})
+res_df <- do.call(rbind, res_list)
+```
+
+```{r}
+# source("Function.R")
+```
+
+## Data
+```{r}
+pan_survival <- readRDS("Output/Steps/R01/pan_survival.Rds")
+
+pan_anno_df <- readRDS(file = "Output/Steps/R01/pan_anno.Rds")
+
+pathway_list <- readRDS("Output/Steps/R01/msigdb_selected_pathways.Rds")
+
+# with_seed(seed = 66, 
+#           pathway_list_sel <- sample(pathway_list, 60))
+```
+
+# Calculate statistics
+```{r}
+res_df %>% group_by(method) %>% dplyr::summarise(median_AUC = median(AUC))
+```
+
+# AUC density
+three algorithm:
+```{r}
+# res_df2 <- head(res_df, 100000)
+
+p1 <- ggdensity(res_df, 
+          x = "AUC",
+          fill = "method",
+          add = "median",
+          color = "method",
+   palette = paletteer::paletteer_d("ggsci::default_igv"),
+          rug = F) + theme_bw()
+p1
+```
+
+split each tumors:
+```{r}
+p2 <- ggdensity(res_df, 
+          x = "AUC",
+          fill = "method",
+          add = "median",
+          color = "method",
+   palette = paletteer::paletteer_d("ggsci::default_igv"),
+          rug = F) + theme_bw() + 
+  facet_wrap(~Type, nrow = 4)
+p2
+```
+
+# AUC compare
+
+Order the AUC results in each tumors:
+```{r}
+rank_tumor <- res_df %>% group_by(Type) %>% 
+  dplyr::summarise(median_AUC = median(AUC))
+
+tmp$levels <- rank_tumor$Type[order(rank_tumor$median_AUC)]
+```
+
+```{r}
+res_df$Type <- factor(res_df$Type, levels = tmp$levels)
+```
+
+
+```{r}
+p6 <- ggboxplot(data = res_df,
+                x = "Type", y = "AUC",
+                fill = "#CE3D32FF") + theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90)) + 
+  labs(x = "ALL")
+p6
+```
+
+```{r}
+table(res_df$method)
+```
+
+
+```{r}
+res_df_cox <- res_df[res_df$method %in% "cox",]
+res_df_lasso <- res_df[res_df$method %in% "lasso",]
+res_df_rf <- res_df[res_df$method %in% "randomforest",]
+```
+
+```{r}
+pp2 <- ggboxplot(data = res_df_cox,
+                x = "Type", y = "AUC",
+                fill = "#FFC20AFF") + theme_bw() + 
+  theme(axis.text.x =  element_blank()) + 
+  labs(x = "Cox")
+
+pp3 <- ggboxplot(data = res_df_lasso,
+                x = "Type", y = "AUC",
+                fill = "#33CC00FF") + theme_bw() + 
+  theme(axis.text.x =  element_blank()) + 
+  labs(x = "lasso")
+
+pp4 <- ggboxplot(data = res_df_rf,
+                x = "Type", y = "AUC",
+                fill = "#990033FF") + theme_bw() + 
+  theme(axis.text.x =  element_blank()) + 
+  labs(x = "randomforest")
+```
+
+
+```{r}
+p3 <- wrap_plots(pp2,pp3,pp4, pp1, ncol = 1)
+p3
+```
+
+# Filter 
+```{r}
+res_df2 <- res_df[res_df$Training > 0.7 & res_df$Testing > 0.7,]
+```
+
+```{r}
+res_df_cox2 <- res_df2[res_df2$method %in% "cox",]
+res_df_lasso2 <- res_df2[res_df2$method %in% "lasso",]
+res_df_rf2 <- res_df2[res_df2$method %in% "randomforest",]
+```
+
+```{r}
+rank_tumor3 <- res_df2 %>% group_by(Type) %>% 
+  dplyr::summarise(counts = n())
+# rank_tumor3
+
+tmp$levels2 <- rank_tumor3$Type[order(rank_tumor3$counts)]
+res_df2$Type <- factor(res_df2$Type, levels = tmp$levels2)
+
+rank_tumor2 <- res_df2 %>% group_by(Type, method) %>% 
+  dplyr::summarise(counts = n())
+# rank_tumor2
+```
+
+```{r}
+p4 <- ggplot(rank_tumor2, aes(x = Type, 
+                     y = counts,
+                     fill = method)) + geom_col(position = position_dodge2(preserve = "single")) + geom_text(aes(label = counts), position = position_dodge2(width = 0.9, preserve = "single"), vjust = -0.8) + theme_bw() + theme(
+                       axis.title.x = element_blank(),
+                       axis.text.x = element_text(angle = 90)
+                     )  + scale_fill_manual(values = rev(paletteer::paletteer_d("RColorBrewer::Set3")))
+p4                    
+```
+
+# Save
+```{r}
+saveRDS(res_df2,
+     file = "Output/Steps/R02/filter_model_AUC0.7.Rds")
+```
+
+Write out model results in each tumors:
+```{r}
+lapply(res_df_list, function(res_df){
+    fwrite(res_df, file = paste0("Output/", res_df$Type[1], ".csv"))
+})
+```
+
+
