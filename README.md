@@ -1,3 +1,9 @@
+# Apical Info
+
+- I finally obtained 118,956,840 models, and these models were splited by tumor types and uploaded at  [Model_generators_results_figshare](https://doi.org/10.6084/m9.figshare.22247455.v5).
+
+
+
 # Updates
 
 ## 0327
