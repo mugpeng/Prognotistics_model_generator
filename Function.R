@@ -36,8 +36,6 @@ tumorFilter <- function(test_exp, test_survival){
 
 # wilcox----
 wilcoxDEGs_fast <- function(exp_df, clinical1){
-  # exp_df in log2 format
-  exp_df <- 2**(exp_df) - 1
   sfInit(parallel = TRUE, cpus = 6)
   sfExport("exp_df", "clinical1")  
   re <- sfLapply(1:nrow(exp_df), function(x){
@@ -46,7 +44,7 @@ wilcoxDEGs_fast <- function(exp_df, clinical1){
     group1 <- exp_df[,colnames(exp_df) %in% id1]
     group2 <- exp_df[,colnames(exp_df) %in% id2]
     p <- wilcox.test(as.numeric(group2[x,]), as.numeric(group1[x,]))$p.value
-    logFC <- log2(mean(as.numeric(group2[x,])) / mean(as.numeric(group1[x,])))
+    logFC <- mean(as.numeric(group2[x,])) - mean(as.numeric(group1[x,]))
     c(p, logFC)
   })
   re <- as.data.frame(do.call(rbind, re))
@@ -58,15 +56,13 @@ wilcoxDEGs_fast <- function(exp_df, clinical1){
 }
 
 wilcoxDEGs <- function(exp_df, clinical1){
-  # exp_df in log2 format
-  exp_df <- 2**(exp_df) - 1
   re <- lapply(1:nrow(exp_df), function(x){
     id1 <- clinical1[clinical1$group %in% levels(clinical1$group)[1],]$patient
     id2 <- clinical1[clinical1$group %in% levels(clinical1$group)[2],]$patient
     group1 <- exp_df[,colnames(exp_df) %in% id1]
     group2 <- exp_df[,colnames(exp_df) %in% id2]
     p <- wilcox.test(as.numeric(group2[x,]), as.numeric(group1[x,]))$p.value
-    logFC <- log2(mean(as.numeric(group2[x,])) / mean(as.numeric(group1[x,])))
+    logFC <- mean(as.numeric(group2[x,])) - mean(as.numeric(group1[x,]))
     c(p, logFC)
   })
   re <- as.data.frame(do.call(rbind, re))
