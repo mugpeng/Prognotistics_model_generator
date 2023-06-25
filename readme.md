@@ -6,6 +6,14 @@
 
 # Updates
 
+## 0625
+
+DIY your own dataset(train, test, external validation), genes input
+
+![](http://cos01.mugpeng.top/img/20230625160311.png)
+
+
+
 ## 0327
 
 fix a function bug of wilcoxDEGs.
