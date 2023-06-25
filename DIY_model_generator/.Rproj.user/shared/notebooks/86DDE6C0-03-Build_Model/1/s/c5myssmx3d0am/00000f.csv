@@ -1,0 +1,7 @@
+"0","cox_re <- coxFilter(test_exp4, test_survival4)"
+"0","cox_re2 <- cox_re[cox_re < .05]"
+"0","p_val <- .01"
+"0","while(length(cox_re2) > 50) {"
+"0","  cox_re2 <- cox_re2[cox_re2 < p_val]"
+"0","  p_val = p_val / 2"
+"0","}"

@@ -1,0 +1,55 @@
+```{r library, include=FALSE}
+my_packages <- c("tidyverse", "data.table",
+                 "withr",
+                 "ggpubr", "patchwork")
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# Load data
+```{r}
+tmp$res_list <- paste0("Output/output_v1/", list.files("Output/output_v1/"))
+with_seed(seed = 66, tmp$res_list2 <- sample(tmp$res_list, 100))
+# tmp$res_list2 <- tmp$res_list
+
+res_list <- lapply(1:length(tmp$res_list2), function(x){
+  res_df <- fread(tmp$res_list2[x])
+  res_df$Pathway <- gsub("Output/output_v1/", "", tmp$res_list2[x])
+  res_df$Pathway <- gsub(".csv", "", res_df$Pathway)
+  return(res_df)
+})
+res_df <- do.call(rbind, res_list)
+res_df2 <- res_df[res_df$Training > 0.7 & res_df$Testing > 0.7,]
+```
+
+
+# genes in top model 
+```{r}
+res_df4 <- res_df2 %>% group_by(Type, genes) %>% dplyr::summarise(med_AUC = median(AUC))
+```
+
+```{r}
+res_df4_list <- split(res_df4, f = res_df4$Type)
+```
+
+```{r}
+res_df4_list2 <- lapply(res_df4_list, function(xx){
+    xx1 <- tail(xx[order(xx$med_AUC),]$genes,1)
+    data.frame(
+        type = xx$Type[1],
+        xx1
+    )
+})
+```
+
+```{r}
+res_df4_1 <- do.call(rbind, res_df4_list2)
+```
+
+# Save
+```{r}
+
+```
+
+

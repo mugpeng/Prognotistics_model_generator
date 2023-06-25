@@ -1,0 +1,61 @@
+```{r library, include=FALSE}
+my_packages <- c("tidyverse", "data.table",
+                 "GSEABase",
+                 "withr")
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# Choose pathway
+```{r}
+pathway_list <- readRDS("Input/msigdb_selected_pathways.Rds")
+```
+
+Select immune related pathway:
+```{r}
+pathway_list_sel <- pathway_list[grepl("IMMU", names(pathway_list))] 
+```
+
+# Reformat data
+Train data:
+```{r}
+load("Input/GSE53625.Rda")
+GSE53625_exp <- GSE53625_exp 
+GSE53625_clinical <- GSE53625_clinical[,c(2,69,68,67)]
+```
+
+external/validation data:
+```{r}
+load("Input/GSE53624.Rda")
+GSE53624_exp <- GSE53624_exp2 
+GSE53624_clinical <- GSE53624_clinical2[,c(2,69,68)]
+load("Input/GSE53622.Rda")
+GSE53622_exp <- GSE53622_exp2 
+GSE53622_clinical <- GSE53622_clinical2[,c(2,69,68)]
+
+# tcga
+load("Input/tcga.Rda")
+tcga_exp <- target_exp_tpm
+tcga_clinical <- target_clinical2[,c(1,2,4)]
+```
+
+rename:
+```{r}
+colnames(GSE53622_clinical)[1] <- "sample"
+colnames(GSE53624_clinical)[1] <- "sample"
+colnames(GSE53625_clinical)[1] <- "sample"
+```
+
+# Save
+```{r}
+save(
+  pathway_list_sel, # Pathway
+  GSE53625_exp, GSE53625_clinical, # Train
+  GSE53624_exp, GSE53624_clinical,
+  GSE53622_exp, GSE53622_clinical,
+  tcga_exp, tcga_clinical, # Validate
+  file = "Output/data.Rda"
+)
+```
+

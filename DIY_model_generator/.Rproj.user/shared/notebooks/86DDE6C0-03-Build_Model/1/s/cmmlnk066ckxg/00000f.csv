@@ -1,0 +1,5 @@
+"0","calAUC <- function(re){"
+"0","  pred <- prediction(re[,1], re[,2]) # predict events by prob_min"
+"0","  auc <- performance(pred,""auc"")@y.values[[1]] # get auc value"
+"0","  return(auc)"
+"0","}"

@@ -1,0 +1,482 @@
+# load data
+```{r}
+my_packages <- c("tidyverse", "data.table",
+                 "survival", "survminer",
+                 "glmnet","ROCR",
+                 "rsample", "withr",
+                 "ggplot2", "Cairo",
+                 "timeROC")
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+```{r}
+load("Output/data.Rda")
+```
+
+```{r}
+save_para <- list(
+  index_path = 60,
+  seed = 60,
+  cv = 9,
+  alpha = 0.9
+)
+```
+
+```{r}
+test_exp <- GSE53625_exp
+test_survival <- GSE53625_clinical
+
+val_exp1 <- GSE53622_exp
+val_survival1 <- GSE53622_clinical
+val_exp2 <- GSE53624_exp
+val_survival2 <- GSE53624_clinical
+val_exp3 <- tcga_exp
+val_survival3 <- tcga_clinical
+
+pathway <- pathway_list_sel[[save_para[[1]]]]
+genes <- pathway@geneIds
+```
+
+```{r}
+val_list <- list(
+  list(val_exp1, val_survival1),
+  list(val_exp2, val_survival2),
+  list(val_exp3, val_survival3)
+)
+```
+
+# Function
+```{r}
+wilcoxDEGs <- function(exp_df, clinical1){
+  # exp_df in log2 format
+  exp_df <- 2**(exp_df) - 1
+  re <- lapply(1:nrow(exp_df), function(x){
+    id1 <- clinical1[clinical1$group %in% levels(clinical1$group)[1],]$patient
+    id2 <- clinical1[clinical1$group %in% levels(clinical1$group)[2],]$patient
+    group1 <- exp_df[,colnames(exp_df) %in% id1]
+    group2 <- exp_df[,colnames(exp_df) %in% id2]
+    p <- wilcox.test(as.numeric(group2[x,]), as.numeric(group1[x,]))$p.value
+    logFC <- log2(mean(as.numeric(group2[x,])) / mean(as.numeric(group1[x,])))
+    c(p, logFC)
+  })
+  re <- as.data.frame(do.call(rbind, re))
+  rownames(re) <- rownames(exp_df)
+  colnames(re) <- c("P.value", "LogFC")
+  re$FDR <- p.adjust(re$P.value, method = "fdr") 
+  return(re)
+}
+```
+
+```{r}
+coxFilter <- function(test_exp3, test_survival3){
+  test_surv <- with(test_survival3, Surv(OS.time, OS))
+  re <- apply(test_exp3, 1, function(gene){
+    res.cox <- summary(coxph(test_surv ~ gene))
+    # res.cox$waldtest[3]
+    return(res.cox$waldtest[3])
+  })
+  return(re)
+}
+```
+
+```{r}
+calAUC <- function(re){
+  pred <- prediction(re[,1], re[,2]) # predict events by prob_min
+  auc <- performance(pred,"auc")@y.values[[1]] # get auc value
+  return(auc)
+}
+```
+
+```{r}
+plot_time_ROC <- function(clinical, title, times = c(1,3,5), colors){
+  ROC <- timeROC(T = clinical$OS.Year,
+                    delta = clinical$OS,
+                    marker = clinical$risk_scores,
+                    cause = 1,
+                    weighting = "marginal",
+                    times = times,
+                    ROC = T,
+                    iid = T)
+  ROC_df <- data.frame(tpr_1 = ROC$TP[,1],
+                   fpr_1 = ROC$FP[,1],
+                   tpr_3 = ROC$TP[,2],
+                   fpr_3 = ROC$FP[,2],
+                   tpr_5 = ROC$TP[,3],
+                   fpr_5 = ROC$FP[,3])
+  auc_1 <- ROC$AUC[[1]]
+  auc_3 <- ROC$AUC[[2]]
+  auc_5 <- ROC$AUC[[3]]
+  p <- ggplot() + 
+    geom_line(data = ROC_df, aes(x = fpr_1, y = tpr_1),color = colors[1],
+              size = 2) + 
+    geom_line(data = ROC_df, aes(x = fpr_3, y = tpr_3),color = colors[2],
+              size = 2)+
+    geom_line(data = ROC_df, aes(x = fpr_5, y = tpr_5),color = colors[3],
+              size = 2) +
+    geom_line(aes(x=c(0,1),y=c(0,1)),color = "grey")+
+    theme_bw()+
+    annotate("text",x = .75, y = .15,
+             size = 6, fontface =2,
+             label = paste("2 years = ",round(auc_1,2)),color = colors[1])+
+    annotate("text",x = .75, y = .25, 
+             size = 6, fontface =2,
+             label = paste("3 years = ",round(auc_3,2)),
+             color = colors[2], )+
+    annotate("text",x = .75, y = .35, 
+             size = 6, fontface =2,
+             label = paste("5 years = ",round(auc_5,2)),color = colors[3])+
+    scale_x_continuous(name  = "fpr")+
+    scale_y_continuous(name = "tpr") + ggtitle(title) + 
+    theme(
+  axis.text = element_text( 
+    size = 10,
+    color = "black"
+  ),
+  axis.title = element_text( 
+    size = 15,
+    face = "bold"
+  ),
+  axis.line = element_line(
+    color = "black"
+  )
+    )
+  return(p)
+}
+
+plot_time_ROC_2 <- function(clinical, title, times = c(1,3,5), colors){
+  ROC <- timeROC(T = clinical$OS.Year,
+                    delta = clinical$OS,
+                    marker = clinical$risk_scores,
+                    cause = 1,
+                    weighting = "marginal",
+                    times = times,
+                    ROC = T,
+                    iid = T)
+  ROC_df <- data.frame(tpr_1 = ROC$TP[,1],
+                   fpr_1 = ROC$FP[,1],
+                   tpr_3 = ROC$TP[,2],
+                   fpr_3 = ROC$FP[,2],
+                   tpr_5 = ROC$TP[,3],
+                   fpr_5 = ROC$FP[,3])
+  auc_1 <- ROC$AUC[[1]]
+  auc_3 <- ROC$AUC[[2]]
+  auc_5 <- ROC$AUC[[3]]
+  p <- ggplot() + 
+    geom_line(data = ROC_df, aes(x = fpr_1, y = tpr_1),color = colors[1],
+              size = 2) + 
+    geom_line(data = ROC_df, aes(x = fpr_3, y = tpr_3),color = colors[2],
+              size = 2)+
+    geom_line(data = ROC_df, aes(x = fpr_5, y = tpr_5),color = colors[3],
+              size = 2) +
+    geom_line(aes(x=c(0,1),y=c(0,1)),color = "grey")+
+    theme_bw()+
+    annotate("text",x = .75, y = .15,
+             size = 6, fontface =2,
+             label = paste("2 years = ",round(auc_1,2)),color = colors[1])+
+    annotate("text",x = .75, y = .25, 
+             size = 6, fontface =2,
+             label = paste("3 years = ",round(auc_3,2)),
+             color = colors[2], )+
+    annotate("text",x = .75, y = .35, 
+             size = 6, fontface =2,
+             label = paste("4 years = ",round(auc_5,2)),color = colors[3])+
+    scale_x_continuous(name  = "fpr")+
+    scale_y_continuous(name = "tpr") + ggtitle(title) + 
+    theme(
+  axis.text = element_text( 
+    size = 10,
+    color = "black"
+  ),
+  axis.title = element_text( 
+    size = 15,
+    face = "bold"
+  ),
+  axis.line = element_line(
+    color = "black"
+  )
+    )
+  return(p)
+}
+```
+
+
+# Model
+## DEGs
+```{r}
+clinical1 <- data.frame(
+    patient = colnames(test_exp),
+    group = test_survival$group
+  )
+clinical1$group <- factor(clinical1$group, levels = c("Normal", "Tumor"))
+
+test_exp2 <- test_exp[rownames(test_exp) %in% genes,]
+if (as.numeric(table(clinical1$group)[1]) > 4){
+  DEGs <- wilcoxDEGs(test_exp2, clinical1)
+  DEGs2 <- DEGs[abs(DEGs$LogFC) > 1 & DEGs$P.value < .05,]
+  test_exp3 <- test_exp2[rownames(test_exp2) %in% rownames(DEGs2),]
+  test_survival4 <- test_survival[test_survival$group %in% "Tumor",]
+  test_exp4 <- test_exp3[,match(test_survival4$sample, colnames(test_exp3))]
+} else{
+  test_exp4 <- test_exp2
+  test_survival4 <- test_survival
+}
+```
+
+```{r}
+DEGs$group <- ifelse(DEGs$LogFC > 1 & DEGs$P.value < .05, "UP",
+                               ifelse(
+                                 DEGs$LogFC < -1 & DEGs$P.value < .05, "DOWN", "NOT"
+                               ))
+DEGs$group <- factor(DEGs$group,
+                               levels = c("DOWN", "NOT", "UP"))
+
+p1 <- ggplot(data = DEGs, 
+              aes(x = LogFC, 
+                  y = -log10(P.value))) +
+    geom_point(size=3.5, alpha = 0.6, 
+               aes(color = group)) +
+    theme_bw() + theme(
+      axis.title = element_text(size = 14, face = "bold"), 
+      axis.text = element_text(size = 14), 
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 12)) + 
+    ylab("-log10(Pvalue)") + scale_color_manual(values = c("#44bce4", "grey", "#fc7474")) + geom_vline(xintercept=c(-1, 1),lty=4,col="black",lwd=0.8) + geom_hline(yintercept = -log10(0.05),lty=4,col="black",lwd=0.8) 
+p1
+```
+
+```{r}
+ggsave(plot = p1,
+  filename = "Plot/p1.png", 
+  width = 5,             
+  height = 5,           
+  units = "in",         
+  dpi = 300)
+```
+
+## Cox
+```{r}
+cox_re <- coxFilter(test_exp4, test_survival4)
+cox_re2 <- cox_re[cox_re < .05]
+p_val <- .01
+while(length(cox_re2) > 50) {
+  cox_re2 <- cox_re2[cox_re2 < p_val]
+  p_val = p_val / 2
+}
+test_exp5 <- test_exp4[rownames(test_exp4) %in% names(cox_re2),]
+```
+
+### forest plot
+https://stackoverflow.com/questions/73227090/how-to-create-1-forest-plot-for-multi-and-univariable-factor-variables-cox-re
+
+## Build
+```{r}
+## Filtered with OS data
+test_survival5 <- na.omit(test_survival4)
+test_exp5 <- test_exp5[,match(test_survival5$sample, colnames(test_exp5))]
+# Change gene names
+rownames(test_exp5) <- gsub("-", "_", rownames(test_exp5), fixed = T)
+```
+
+```{r}
+with_seed(seed = save_para[[2]], svfold_cv <- vfold_cv(test_survival5, v = 3, repeats = 5,                                               strata = OS))
+svfold_cv <- svfold_cv[[1]]
+
+cv = svfold_cv[[save_para[[3]]]]
+# Split data 
+train_survival <- training(cv)
+val_survival <- testing(cv)
+train_exp <- test_exp5[,match(train_survival$sample, colnames(test_exp5))]
+val_exp <- test_exp5[,match(val_survival$sample, colnames(test_exp5))]
+```
+
+```{r}
+with_seed(seed = 66, lasso_CV <- cv.glmnet(x=t(train_exp), y=train_survival$OS, nlambda = 1000,alpha = save_para[[4]]))
+plot(lasso_CV)
+```
+
+```{r}
+f1 <- lasso_CV$glmnet.fit
+plot(f1, xvar="lambda", label=F)
+```
+
+```{r}
+CairoPNG(
+  filename = "Plot/p2.png",
+  width = 5,
+  height = 5,
+  units = "in",
+  dpi = 300)
+plot(lasso_CV)
+dev.off()
+
+CairoPNG(
+  filename = "Plot/p3.png",
+  width = 5,
+  height = 5,
+  units = "in",
+  dpi = 300)
+plot(f1, xvar="lambda", label=F)
+dev.off()
+```
+
+
+## AUC plot
+### Prepare
+```{r}
+## Train
+lasso.pre.train <- as.data.frame(predict(lasso_CV, newx=t(train_exp), s=lasso_CV$lambda.min))
+lasso.pre.train$True <- train_survival$OS
+train.auc <- tryCatch(calAUC(lasso.pre.train),
+                      error = function(x){0})
+train_survival$risk_scores <- lasso.pre.train$s1
+train_survival$OS.Year <- train_survival$OS.time/12
+
+## Test
+lasso.pre.test <- as.data.frame(predict(lasso_CV, newx=t(val_exp), s=lasso_CV$lambda.min))
+lasso.pre.test$True <- val_survival$OS
+test.auc <- tryCatch(calAUC(lasso.pre.test),
+                     error = function(x){0})
+val_survival$risk_scores <- lasso.pre.test$s1
+val_survival$OS.Year <- val_survival$OS.time/12
+```
+
+```{r}
+val_re <- lapply(val_list, function(my_list){
+          # my_list <- val_list[[1]]
+          exp <- my_list[[1]]
+          survival <- my_list[[2]]
+          exp_model <- exp[rownames(exp) %in% rownames(train_exp),]
+          missed_genes <- rownames(train_exp)[!rownames(train_exp) %in% rownames(exp_model)]
+          if(length(missed_genes) > 0){
+            alias_df <- symbol2Alias(missed_genes, exp)
+            alias_df2 <- rbind(alias_df,
+                               data.frame(
+                                 symbol = rownames(exp_model),
+                                 alias = rownames(exp_model)
+                               ))
+            exp_model <- exp[rownames(exp) %in% c(rownames(train_exp), 
+                                                  alias_df$alias),]
+            alias_df2 <- alias_df2[match(rownames(exp_model), alias_df2$alias),]
+            rownames(exp_model) <- alias_df2$symbol
+          }
+          if(!all(rownames(train_exp) %in% rownames(exp_model))){
+            outside.auc = 0
+          } else{
+            # outside_survival <- GSE84976_clinical
+            outside_survival <- survival
+            exp_model <- exp_model[,match(outside_survival$sample, 
+                                          colnames(exp_model))]
+            outside_lasso <- as.data.frame(predict(lasso_CV, newx=t(exp_model), s=lasso_CV$lambda.min))
+            outside_lasso$True <- outside_survival$OS
+            outside_lasso <- na.omit(outside_lasso)
+            outside.auc <- tryCatch(calAUC(outside_lasso),
+                                    error = function(x){0})
+            outside_survival$risk_scores <- outside_lasso$s1
+          }
+          return(outside_survival)
+        })
+```
+
+```{r}
+# GSE53622
+out_survival1 <- val_re[[1]]
+out_survival1$OS.Year <- out_survival1$OS.time/12
+# GSE53624
+out_survival2 <- val_re[[2]]
+out_survival2$OS.Year <- out_survival2$OS.time/12
+# TCGA
+out_survival3 <- val_re[[3]]
+out_survival3$OS.Year <- out_survival3$OS.time/365
+```
+
+### Plot
+```{r}
+tmp$colors <- c('#fccc54', "#44bce4", "#fc7474")
+p4 <- plot_time_ROC(train_survival, "TRAIN", times = c(2,3,5),
+              colors = tmp$colors)
+p4
+```
+
+```{r}
+tmp$colors <- c('#fccc54', "#44bce4", "#fc7474")
+p5 <- plot_time_ROC(val_survival, "TEST", times = c(2,3,5),
+              colors = tmp$colors)
+p5
+```
+
+```{r}
+tmp$colors <- c('#fccc54', "#44bce4", "#fc7474")
+p6 <- plot_time_ROC_2(out_survival1, "GSE53622", times = c(2,3,4),
+              colors = tmp$colors)
+p6
+```
+
+```{r}
+tmp$colors <- c('#fccc54', "#44bce4", "#fc7474")
+p7 <- plot_time_ROC(out_survival2, "GSE53624", times = c(2,3,5),
+              colors = tmp$colors)
+p7
+```
+
+```{r}
+tmp$colors <- c('#fccc54', "#44bce4", "#fc7474")
+p8 <- plot_time_ROC_2(out_survival3, "TCGA", times = c(2,3,4),
+              colors = tmp$colors)
+p8
+```
+
+```{r}
+ggsave(plot = p4,
+  filename = "Plot/p4.png", 
+  width = 5,             
+  height = 5,           
+  units = "in",         
+  dpi = 300)
+
+ggsave(plot = p5,
+  filename = "Plot/p5.png", 
+  width = 5,             
+  height = 5,           
+  units = "in",         
+  dpi = 300)
+
+ggsave(plot = p6,
+  filename = "Plot/p6.png", 
+  width = 5,             
+  height = 5,           
+  units = "in",         
+  dpi = 300)
+
+ggsave(plot = p7,
+  filename = "Plot/p7.png", 
+  width = 5,             
+  height = 5,           
+  units = "in",         
+  dpi = 300)
+
+ggsave(plot = p8,
+  filename = "Plot/p8.png", 
+  width = 5,             
+  height = 5,           
+  units = "in",         
+  dpi = 300)
+```
+
+
+## Select genes
+```{r}
+best_model <- glmnet(x=t(train_exp), y=train_survival$OS, alpha = save_para[[4]], lambda = lasso_CV$lambda.min)
+best_model_re <- as.matrix(coef(best_model))
+best_model_re <- best_model_re[,1]
+best_model_re <- best_model_re[-1]
+selected_lasso_genes <- names(best_model_re[best_model_re!=0])
+```
+
+```{r}
+selected_lasso_genes
+```
+
+
+# Save

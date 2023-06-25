@@ -1,0 +1,5 @@
+"0","auc_df$mean_auc2 <- mean(auc_df$V1, auc_df$V2, auc_df$V3, auc_df$V4)
+"
+"2","Error in mean.default(auc_df$V1, auc_df$V2, auc_df$V3, auc_df$V4) : 
+  'trim'必需是长度必需为一的数值
+"

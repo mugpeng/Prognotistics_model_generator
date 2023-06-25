@@ -1,0 +1,7 @@
+"0","CairoPNG("
+"0","  filename = ""Plot/p2.png"","
+"0","  width = 5,"
+"0","  height = 5,"
+"0","  units = ""in"","
+"0","  dpi = 300)"
+"0","plot(lasso_CV)"

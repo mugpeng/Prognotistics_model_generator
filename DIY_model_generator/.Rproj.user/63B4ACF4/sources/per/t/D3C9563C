@@ -1,0 +1,28 @@
+{
+    "id": "D3C9563C",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1687655491411.0,
+    "source_on_save": false,
+    "relative_order": 14,
+    "properties": {
+        "id": "378bef93345a4e9b8de9f11a6db02004",
+        "name": "pathway_list",
+        "title": "pathway_list",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 3618700781675558709,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1687655491411,
+    "read_only": false,
+    "read_only_alternatives": []
+}

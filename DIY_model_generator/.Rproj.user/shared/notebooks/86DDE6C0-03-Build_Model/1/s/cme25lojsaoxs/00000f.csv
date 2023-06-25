@@ -1,0 +1,2 @@
+"0","f1 <- lasso_CV$glmnet.fit"
+"0","plot(f1, xvar=""lambda"", label=F)"

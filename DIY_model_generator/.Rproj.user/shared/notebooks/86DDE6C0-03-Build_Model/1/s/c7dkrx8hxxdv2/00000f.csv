@@ -1,0 +1,5 @@
+"0","## Filtered with OS data"
+"0","test_survival5 <- na.omit(test_survival4)"
+"0","test_exp5 <- test_exp5[,match(test_survival5$sample, colnames(test_exp5))]"
+"0","# Change gene names"
+"0","rownames(test_exp5) <- gsub(""-"", ""_"", rownames(test_exp5), fixed = T)"

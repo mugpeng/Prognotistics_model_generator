@@ -1,0 +1,250 @@
+```{r}
+source("Function.R")
+load("Output/data.Rda")
+```
+
+# Function
+```{r}
+myLassoLike_v2 <- function(test_exp5, 
+                        test_survival4,
+                        seeds = c(1,2),
+                        alphas = c(0,0.5,1),
+                        pathway_names){
+  re <- lapply(seeds, function(seed){
+    with_seed(seed = seed, svfold_cv <- vfold_cv(test_survival4, v = 3, repeats = 5,                                               strata = OS))
+    svfold_cv <- svfold_cv[[1]]
+    a <- 1
+    lapply(svfold_cv, function(cv){
+      # cv = svfold_cv[[2]]
+      # Split data 
+      train_survival <- training(cv)
+      val_survival <- testing(cv)
+      train_exp <- test_exp5[,match(train_survival$sample, colnames(test_exp5))]
+      val_exp <- test_exp5[,match(val_survival$sample, colnames(test_exp5))]
+      # model construction
+      auc1 <- lapply(alphas, function(alpha){
+        # alpha = 1
+        with_seed(seed = 66, lasso_CV <- cv.glmnet(x=t(train_exp), y=train_survival$OS, nlambda = 1000,alpha = alpha))
+        ## Train
+        lasso.pre.train <- as.data.frame(predict(lasso_CV, newx=t(train_exp), s=lasso_CV$lambda.min))
+        lasso.pre.train$True <- train_survival$OS
+        train.auc <- tryCatch(calAUC(lasso.pre.train),
+                              error = function(x){0})
+        ## Test
+        lasso.pre.test <- as.data.frame(predict(lasso_CV, newx=t(val_exp), s=lasso_CV$lambda.min))
+        lasso.pre.test$True <- val_survival$OS
+        test.auc <- tryCatch(calAUC(lasso.pre.test),
+                             error = function(x){0})
+        index <- a
+        ## Test external data1
+        val_re <- lapply(val_list, function(my_list){
+          # my_list <- val_list[[1]]
+          exp <- my_list[[1]]
+          survival <- my_list[[2]]
+          exp_model <- exp[rownames(exp) %in% rownames(train_exp),]
+          missed_genes <- rownames(train_exp)[!rownames(train_exp) %in% rownames(exp_model)]
+          if(length(missed_genes) > 0){
+            alias_df <- symbol2Alias(missed_genes, exp)
+            alias_df2 <- rbind(alias_df,
+                               data.frame(
+                                 symbol = rownames(exp_model),
+                                 alias = rownames(exp_model)
+                               ))
+            exp_model <- exp[rownames(exp) %in% c(rownames(train_exp), 
+                                                  alias_df$alias),]
+            alias_df2 <- alias_df2[match(rownames(exp_model), alias_df2$alias),]
+            rownames(exp_model) <- alias_df2$symbol
+          }
+          if(!all(rownames(train_exp) %in% rownames(exp_model))){
+            outside.auc = 0
+          } else{
+            # outside_survival <- GSE84976_clinical
+            outside_survival <- survival
+            exp_model <- exp_model[,match(outside_survival$sample, 
+                                          colnames(exp_model))]
+            outside_lasso <- as.data.frame(predict(lasso_CV, newx=t(exp_model), s=lasso_CV$lambda.min))
+            outside_lasso$True <- outside_survival$OS
+            outside_lasso <- na.omit(outside_lasso)
+            outside.auc <- tryCatch(calAUC(outside_lasso),
+                                    error = function(x){0})
+          }
+          return(outside.auc)
+        })
+        # collect genes
+        best_model <- glmnet(x=t(train_exp), y=train_survival$OS, alpha = alpha, lambda = lasso_CV$lambda.min)
+        best_model_re <- as.matrix(coef(best_model))
+        best_model_re <- best_model_re[,1]
+        best_model_re <- best_model_re[-1]
+        selected_lasso_genes <- names(best_model_re[best_model_re!=0])
+        selected_lasso_genes <- paste0(selected_lasso_genes, collapse = ", ")
+        # print(alpha)
+        list(train.auc,
+          test.auc,
+          seed, index, alpha, selected_lasso_genes, val_re, pathway_names)
+      })
+      # print(a)
+      a <<- a + 1
+      return(auc1)
+    })
+  })
+  return(re)
+}
+
+directMode_lasso <- function(test_exp,
+                       test_survival,
+                       genes,
+                       val_list,
+                       pathway_names,
+                       seeds = 60:61){
+  # Prepare
+  clinical1 <- data.frame(
+    patient = colnames(test_exp),
+    group = test_survival$group
+  )
+  clinical1$group <- factor(clinical1$group, levels = c("Normal", "Tumor"))
+  # Filter
+  ## DEGs
+  test_exp2 <- test_exp[rownames(test_exp) %in% genes,]
+  if (as.numeric(table(clinical1$group)[1]) > 4){
+    DEGs <- wilcoxDEGs(test_exp2, clinical1)
+    DEGs2 <- DEGs[abs(DEGs$LogFC) > 1 & DEGs$P.value < .05,]
+    test_exp3 <- test_exp2[rownames(test_exp2) %in% rownames(DEGs2),]
+    test_survival4 <- test_survival[test_survival$group %in% "Tumor",]
+    test_exp4 <- test_exp3[,match(test_survival4$sample, colnames(test_exp3))]
+  } else{
+    test_exp4 <- test_exp2
+    test_survival4 <- test_survival
+  }
+  ## Cox
+  cox_re <- coxFilter(test_exp4, test_survival4)
+  cox_re2 <- cox_re[cox_re < .05]
+  p_val <- .01
+  while(length(cox_re2) > 50) {
+    cox_re2 <- cox_re2[cox_re2 < p_val]
+    p_val = p_val / 2
+  }
+  test_exp5 <- test_exp4[rownames(test_exp4) %in% names(cox_re2),]
+  if(nrow(test_exp5) <= 3){
+    return(NA)
+  } else{
+    ## Filtered with OS data
+    test_survival5 <- na.omit(test_survival4)
+    test_exp5 <- test_exp5[,match(test_survival5$sample, colnames(test_exp5))]
+    # Change gene names
+    rownames(test_exp5) <- gsub("-", "_", rownames(test_exp5), fixed = T)
+    # Model Part
+    # print(paste0("Start Train Model for: ", test_survival5$Project[1]))
+    ## lasso
+    time1 <- system.time(lasso.re <- myLassoLike_v2(test_exp5, test_survival5, seeds = seeds, alphas = seq(0,1,0.1)), pathway_names)
+    print(paste0("Lasso: ", as.numeric(time1[3])))
+    return(lasso.re)
+  }
+}
+```
+
+# Pipeline
+```{r}
+# args <- commandArgs(T)
+# index1 <- as.numeric(args[1])
+# # index1 = 1
+# pathway <- pathway_list_sel[[index1]]
+# genes <- pathway@geneIds
+```
+
+rename:
+```{r}
+test_exp <- GSE53625_exp
+test_survival <- GSE53625_clinical
+
+val_exp1 <- GSE53622_exp
+val_survival1 <- GSE53622_clinical
+val_exp2 <- GSE53624_exp
+val_survival2 <- GSE53624_clinical
+val_exp3 <- tcga_exp
+val_survival3 <- tcga_clinical
+```
+
+```{r}
+val_list <- list(
+  list(val_exp1, val_survival1),
+  list(val_exp2, val_survival2),
+  list(val_exp3, val_survival3)
+)
+```
+
+
+```{r}
+# all_cost_time <- system.time(
+#   re <- tryCatch(directMode(test_exp,
+#                             test_survival,
+#                             genes, seeds = 60:61,
+#                             val_list
+#                             ), error = function(x){ NA })
+# )
+```
+
+Run:
+```{r}
+all_cost_time <- system.time(
+  re_list <- lapply(pathway_list_sel, function(pathway){
+    genes <- pathway@geneIds
+    pathway_names <- pathway@setName
+    re <- tryCatch(directMode_lasso(test_exp,
+                            test_survival,
+                            genes, 
+                            val_list,
+                            pathway_names,
+                            seeds = 60:61
+                            ), error = function(x){ NA })
+  })
+)
+
+```
+
+Select:
+```{r}
+re_list_1 <- unlist(re_list[!is.na(re_list)], recursive = F)
+re_list_2 <- unlist(re_list_1[!is.na(re_list_1)], recursive = F)
+re_list_3 <- unlist(re_list_2[!is.na(re_list_2)], recursive = F)
+
+auc_list <- lapply(re_list_3, function(my_list){
+  # my_list <- re_list_3[[1]]
+  c(unlist(my_list[1:2]), unlist(my_list[[7]]))
+})
+auc_df <- as.data.frame(do.call(rbind, auc_list))
+
+auc_df$mean_auc <- rowMeans(auc_df)
+
+auc_df$mean_auc2 <- rowMeans(auc_df[,-c(5:6)])
+```
+
+Extract:
+```{r}
+auc_df[2408,]
+```
+
+```{r}
+re_list[[60]][[1]][[9]][[10]]
+```
+
+# Build select model
+```{r}
+pathway_list_sel[[60]]
+```
+
+Save parameters:
+```{r}
+save_para <- list(
+  index_path = 60,
+  seed = 60,
+  cv = 9,
+  alpha = 0.9
+)
+```
+
+# Save
+```{r}
+save(re_list,
+     file = "Output/re_list.Rda")
+```
+

@@ -1,0 +1,4 @@
+"0","tmp$colors <- c('#fccc54', ""#44bce4"", ""#fc7474"")"
+"0","p7 <- plot_time_ROC(out_survival2, ""GSE53624"", times = c(2,3,5),"
+"0","              colors = tmp$colors)"
+"0","p7"

@@ -1,0 +1,28 @@
+{
+    "id": "8E329063",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1687672885549.0,
+    "source_on_save": false,
+    "relative_order": 11,
+    "properties": {
+        "id": "4257ca671c4d4bda968efa560d9c4a3f",
+        "name": "re_list_3",
+        "title": "re_list_3",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1687672213,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1687672885549,
+    "read_only": false,
+    "read_only_alternatives": []
+}

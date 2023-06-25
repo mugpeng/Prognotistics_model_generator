@@ -1,0 +1,8 @@
+"0","save("
+"0","  pathway_list_sel, # Pathway"
+"0","  GSE53625_exp, GSE53625_clinical, # Train"
+"0","  GSE53624_exp, GSE53624_clinical,"
+"0","  GSE53622_exp, GSE53622_clinical,"
+"0","  tcga_exp, tcga_clinical, # Validate"
+"0","  file = ""Output/data.Rda"""
+"0",")"

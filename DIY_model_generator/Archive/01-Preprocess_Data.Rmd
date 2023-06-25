@@ -1,0 +1,160 @@
+```{r library, include=FALSE}
+my_packages <- c("tidyverse", "data.table",
+                 "GSEABase",
+                 "survival", "survminer",
+                 "car",
+                 "My.stepwise",
+                 "randomForest","glmnet",
+                 "plyr", "ROCR",
+                 "rsample", "withr",
+                 "R.utils",
+                 "snowfall", "parallel")
+pacman::p_load(char = my_packages)
+
+tmp <- list()
+```
+
+# Choose pathway
+```{r}
+pathway_re <- fread("Input/ESCA.csv")
+pathway_re2 <- pathway_re[pathway_re$Training > .7 & pathway_re$Testing > .7,]
+```
+
+Select immune related pathway
+```{r}
+pathway_re3 <- pathway_re2[grepl("IMMU", pathway_re2$Pathway),] 
+```
+
+# Data
+```{r}
+tumor <- "ESCA"
+test_exp <- readRDS("Input/ESCA.Rds")
+pan_anno_df <- readRDS(file = "Input/pan_anno.Rds")
+test_survival <- pan_anno_df[pan_anno_df$Project %in% tumor,]
+
+test_exp <- test_exp[,match(test_survival$sample, colnames(test_exp))]
+
+eg2alias <- readRDS("Input/eg2alias_anndb.Rds")
+pathway_list <- readRDS("Input/msigdb_selected_pathways.Rds")
+```
+
+external data:
+```{r}
+load("Input/GSE53625.Rda")
+load("Input/GSE53624.Rda")
+load("Input/GSE53622.Rda")
+```
+
+function:
+```{r}
+source("Function.R")
+```
+
+# Validate
+```{r}
+tune_grids_lasso <- separate(pathway_re3[pathway_re3$method %in% "lasso",c(4,7,8)], col = tune,
+                             into = c("seed", "cv", "alpha"), sep = ":")
+tmp$tt <- sapply(1:4, function(x){tune_grids_lasso[[x]] <<- as.numeric(tune_grids_lasso[[x]])})
+tune_grids_lasso2 <- tail(tune_grids_lasso[order(tune_grids_lasso$AUC),], 1000)
+tune_grids_lasso2$index <- 1:nrow(tune_grids_lasso2)
+tune_grids_lasso2 <- as.data.frame(unique(tune_grids_lasso2))
+tune_grids_lasso2
+```
+
+```{r}
+valLasso <- function(tune_grids_lasso2, exp, survival){
+  re <- sapply(1:nrow(tune_grids_lasso2), function(index1){
+    # index1 = 1
+    seed = tune_grids_lasso2[index1,1]
+    cv = tune_grids_lasso2[index1,2]
+    alpha = tune_grids_lasso2[index1,3]
+    path = tune_grids_lasso2[index1,5]
+    index2 = which(names(pathway_list) %in% path)
+    pathway = pathway_list[[index2]]
+    genes = pathway@geneIds
+    # Train Prepare
+    test_survival4 <- valProcess(test_exp,
+                                 test_survival,
+                                 genes)[[1]]
+    test_exp5 <- valProcess(test_exp,
+                            test_survival,
+                            genes)[[2]]
+    # Train model
+    with_seed(seed = seed, svfold_cv <- vfold_cv(test_survival4, v = 3, repeats = 5, strata = OS))
+    svfold_cv <- svfold_cv[[1]]
+    cv <- svfold_cv[[cv]]
+    train_survival <- training(cv)
+    val_survival <- testing(cv)
+    train_exp <- test_exp5[,match(train_survival$sample, colnames(test_exp5))]
+    val_exp <- test_exp5[,match(val_survival$sample, colnames(test_exp5))]
+    # Build model
+    lasso_CV <- tryCatch(with_seed(seed = 66, cv.glmnet(x=t(train_exp), y=train_survival$OS, nlambda = 1000,alpha = alpha)),
+                         error = function(x){0})
+    if(!is.list(lasso_CV)) { return(0)}
+    ## Train
+    lasso.pre.train <- as.data.frame(predict(lasso_CV, newx=t(train_exp), s=lasso_CV$lambda.min))
+    lasso.pre.train$True <- train_survival$OS
+    train.auc <- tryCatch(calAUC(lasso.pre.train),
+                          error = function(x){0})
+    ## Test
+    lasso.pre.test <- as.data.frame(predict(lasso_CV, newx=t(val_exp), s=lasso_CV$lambda.min))
+    lasso.pre.test$True <- val_survival$OS
+    test.auc <- tryCatch(calAUC(lasso.pre.test),
+                         error = function(x){0})
+    # External model
+    # exp <- GSE84976_exp
+    exp_model <- exp[rownames(exp) %in% rownames(train_exp),]
+    missed_genes <- rownames(train_exp)[!rownames(train_exp) %in% rownames(exp_model)]
+    if(length(missed_genes) > 0){
+      alias_df <- symbol2Alias(missed_genes, exp)
+      alias_df2 <- rbind(alias_df,
+                         data.frame(
+                           symbol = rownames(exp_model),
+                           alias = rownames(exp_model)
+                         ))
+      exp_model <- exp[rownames(exp) %in% c(rownames(train_exp), 
+                                            alias_df$alias),]
+      alias_df2 <- alias_df2[match(rownames(exp_model), alias_df2$alias),]
+      rownames(exp_model) <- alias_df2$symbol
+    }
+    if(!all(rownames(train_exp) %in% rownames(exp_model))){
+      outside.auc = 0
+    } else{
+      # outside_survival <- GSE53625_clinical2
+      outside_survival <- survival
+      exp_model <- exp_model[,match(rownames(outside_survival),colnames(exp_model))]
+      outside_lasso <- as.data.frame(predict(lasso_CV, newx=t(exp_model), s=lasso_CV$lambda.min))
+      outside_lasso$True <- outside_survival$OS
+      outside_lasso <- na.omit(outside_lasso)
+      outside.auc <- tryCatch(calAUC(outside_lasso),
+                              error = function(x){0})
+    }
+    if(index1 %% 10 == 0) {print(index1)}
+    return(outside.auc)
+  })
+  names(re) <- tune_grids_lasso$index
+  re
+}
+```
+
+```{r}
+tune_re <- valLasso(tune_grids_lasso2, GSE53625_exp2, GSE53625_clinical2)
+```
+
+```{r}
+tune_re <- valLasso(tune_grids_lasso2, GSE53624_exp2, GSE53624_clinical2)
+```
+
+```{r}
+tune_re <- valLasso(tune_grids_lasso2, GSE53622_exp2, GSE53622_clinical2)
+```
+
+# Save
+```{r}
+save(
+  GEO_exp, GEO_clinical,
+  icgc_exp, icgc_clinical,
+  file = "Output/External_data.Rda"
+)
+```
+
